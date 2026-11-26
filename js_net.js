@@ -2,13 +2,18 @@
 (function () {
   'use strict';
   const PREFIX = 'escroom-kr-v1-';
+  const ICE = { config: { iceServers: [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] },
+    { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], username: 'openrelayproject', credential: 'openrelayproject' }
+  ], iceCandidatePoolSize: 4 } };
+
 
   function available() { return typeof window.Peer === 'function'; }
 
   function host(code, handlers) {
     return new Promise((resolve, reject) => {
       if (!available()) return reject(new Error('통신 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인하세요.'));
-      const peer = new window.Peer(PREFIX + code);
+      const peer = new window.Peer(PREFIX + code, ICE);
       const conns = new Set();
       let opened = false;
       const timer = setTimeout(() => { if (!opened) { peer.destroy(); reject(new Error('중계 서버에 연결하지 못했어요.')); } }, 12000);
@@ -36,7 +41,7 @@
   function join(code, handlers) {
     return new Promise((resolve, reject) => {
       if (!available()) return reject(new Error('통신 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인하세요.'));
-      const peer = new window.Peer();
+      const peer = new window.Peer(undefined, ICE);
       let opened = false, quit = false, conn = null;
       const fail = text => { if (!opened) { clearTimeout(timer); peer.destroy(); reject(new Error(text)); } };
       const timer = setTimeout(() => fail('방에 연결하지 못했어요. 방장이 화면을 켜 두었는지 확인하세요.'), 15000);
