@@ -200,3 +200,17 @@ button.suspect { cursor: pointer; border-width: 2px; }
 
 @media (max-height: 520px) { .game { height: auto; min-height: 100dvh; } .scene { min-height: 380px; } }
 @media (prefers-reduced-motion: reduce) { .shake, #flash.go, .timer.danger, .backdrop *, .spot .ico { animation: none !important; } }
+
+/* 메모장 · 개인 랭킹 · 함정 기호 */
+.pin { background: #ffffff14; border: 1px solid #ffffff2e; border-radius: 6px; font-size: .72rem; padding: 2px 7px; margin: 2px 4px 0 0; cursor: pointer; }
+#memo { width: 100%; box-sizing: border-box; background: #0006; color: inherit; border: 1px solid #ffffff2e; border-radius: 10px; padding: 10px; font: inherit; resize: vertical; }
+.marks { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.noteform { display: flex; gap: 6px; }
+.noteform input { flex: 1; min-width: 0; }
+.seg.two { grid-template-columns: 1fr 1fr; margin-bottom: 8px; }
+.mark.fake { color: #ff8a7a; text-shadow: 0 0 12px #ff3a2a; }
+.guess { letter-spacing: 2px; }
+.keys.c4 { grid-template-columns: repeat(4, 1fr); }
+#modal .row { flex-wrap: wrap; }
+.hud .btn.small { padding-left: 7px; padding-right: 7px; white-space: nowrap; }
+@media (max-width: 520px) { .hud .bt { display: none; } .hud { gap: 4px; } .stagebar { gap: 3px; } .stagebar span { width: 24px; height: 24px; } }

@@ -74,5 +74,39 @@
     write('esc-career', c);
   }
 
-  window.Rank = { score, list, submit, career, addCareer, WEIGHT };
+  const tier = total => {
+    let i = 0;
+    while (i + 1 < TIERS.length && total >= TIERS[i + 1][0]) i++;
+    return { icon: TIERS[i][1], name: TIERS[i][2] };
+  };
+
+  /* 개인 랭킹: 게임마다 한 줄씩 저장하고 보여줄 때 사람별로 합산 */
+  const PLAYERS = 'esc-players';
+  function totals(rows) {
+    const by = {};
+    rows.slice().sort((a, b) => a.at - b.at).forEach(r => {
+      const p = by[r.uid] || (by[r.uid] = { uid: r.uid, name: r.name, total: 0, best: 0, games: 0 });
+      p.name = r.name; p.total += Number(r.score) || 0; p.best = Math.max(p.best, Number(r.score) || 0); p.games++;
+    });
+    return Object.values(by).sort((a, b) => b.total - a.total || b.best - a.best).slice(0, 30);
+  }
+  async function players() {
+    try {
+      if (url()) return { list: totals(Object.values(await request(`${url()}/players.json`) || {})), scope: 'online' };
+      const data = await request('api/players');
+      if (Array.isArray(data)) return { list: totals(data), scope: 'server' };
+    } catch (e) { /* 아래의 내 기기 기록으로 대체 */ }
+    return { list: totals(read(PLAYERS, [])), scope: 'local' };
+  }
+  async function submitPlayer(entry) {
+    write(PLAYERS, read(PLAYERS, []).filter(e => e.id !== entry.id).concat(entry).slice(-300));
+    const body = JSON.stringify(entry);
+    try {
+      if (url()) await request(`${url()}/players/${entry.id}.json`, { method: 'PUT', body });
+      else await request('api/players', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      return true;
+    } catch (e) { return false; }
+  }
+
+  window.Rank = { score, list, submit, players, submitPlayer, tier, career, addCareer, WEIGHT };
 })();

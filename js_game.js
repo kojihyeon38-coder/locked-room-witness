@@ -19,6 +19,8 @@
     name: store.get('esc-name') || '',
   };
   store.set('esc-pid', me.pid, sessionStorage);
+  me.uid = store.get('esc-uid') || randomId(12); // 개인 랭킹용 (이 브라우저에 계속 유지)
+  store.set('esc-uid', me.uid);
 
   let S = null;          // 공유 상태 (방장이 원본)
   let P = null;          // S의 시드로 만든 퍼즐
@@ -44,7 +46,7 @@
       diff: null, players: [], stage: 0, solved: {}, lights: {}, found: {}, hints: {}, hintsLeft: 0,
       wrong: 0, hintsUsed: 0, votes: {}, accused: null, result: null, chat: [], events: [], eseq: 0,
       endsAt: 0, scares: 0, cleared: null, picks: [], deduced: false, deduceHint: false,
-      installed: {}, team: '', ranked: !sel.seed, gameId: '', proofStep: 0, points: 0, letter: 'C',
+      installed: {}, team: '', ranked: !sel.seed, gameId: '', proofStep: 0, points: 0, letter: 'C', board: [],
     };
   }
   const connected = () => S.players.filter(p => p.on);
@@ -75,6 +77,7 @@
       phase: 'intro', stage: 0, solved: {}, lights: {}, found: {}, hints: {}, hintsLeft: d.hints, wrong: 0, hintsUsed: 0,
       votes: {}, accused: null, result: null, scares: 0, cleared: null, endsAt: 0, timeLeft: d.minutes * 60,
       installed: {}, picks: [], deduced: false, deduceHint: false, proofStep: 0, points: 0, letter: 'C', gameId: randomId(12),
+      board: [],
       teamName: S.team || `${(S.players.find(p => p.host) || S.players[0]).name}팀`,
     });
     Object.values(P.puzzles).filter(z => z.type === 'lights').forEach(z => { S.lights[z.id] = z.start.slice(); });
@@ -157,7 +160,7 @@
         else penalty(`${nameOf(pid)}: 「${z.lock[1]}」 오답`);
         break;
       case 'light': {
-        if (!open || z.type !== 'lights' || !(a.i >= 0 && a.i < 9 && Number.isInteger(a.i))) return;
+        if (!open || z.type !== 'lights' || !(Number.isInteger(a.i) && a.i >= 0 && a.i < S.lights[z.id].length)) return;
         window.Puzzles.flip(S.lights[z.id], a.i);
         if (S.lights[z.id].every(v => v)) solve(z.id, pid);
         break;
@@ -234,6 +237,18 @@
         emit('chat', { from: pid, text: `${p.av} ${p.name}: ${text}` });
         break;
       }
+      case 'note': {
+        const text = String(a.text || '').trim().slice(0, 200);
+        const p = S.players.find(x => x.pid === pid);
+        if (!text || !p || S.phase === 'lobby') return;
+        S.board.push({ n: ++S.eseq, pid, who: `${p.av} ${p.name}`, text });
+        if (S.board.length > 60) S.board.shift();
+        emit('note', { from: pid, text: `📌 ${p.name}님이 팀 메모를 남겼어요` });
+        break;
+      }
+      case 'noteDel':
+        S.board = S.board.filter(m => !(m.n === a.n && (m.pid === pid || isHost)));
+        break;
       case 'lobby':
         if (!isHost) return;
         S.phase = 'lobby'; S.players = S.players.filter(p => p.on); S.seed = randomId(6); S.ranked = true;
@@ -259,7 +274,7 @@
     const left = (S.endsAt - Date.now()) / 1000;
     if (left <= 0) { finish('timeout'); return sync(); }
     const total = P.d.minutes * 60, elapsed = total - left;
-    if (S.scares < P.theme.scares.length && elapsed > (S.scares + 1) * total / 6) {
+    if (S.scares < P.theme.scares.length && elapsed > (S.scares + 1) * total / (P.theme.scares.length + 2)) {
       emit('scare', { text: P.theme.scares[S.scares++] });
       sync();
     }
@@ -381,6 +396,7 @@
     else if (e.type === 'door') { window.Sound.play('door'); closeModal(); }
     else if (e.type === 'scare') { window.Sound.play('scare'); toast(e.text, 'scare'); flash(); }
     else if (e.type === 'chat') { if (e.from !== me.pid) { window.Sound.play('msg'); if (!modal || modal.kind !== 'chat') toast(e.text); } }
+    else if (e.type === 'note') { if (e.from !== me.pid) { window.Sound.play('msg'); toast(e.text); } }
     else if (e.type === 'toast') toast(e.text);
   }
 
@@ -419,7 +435,7 @@
     const rec = records();
     return `<div class="themes">${window.THEMES.map(t => `
       <button class="theme ${t.id === selected ? 'on' : ''}" data-act="theme" data-id="${t.id}" ${enabled ? '' : 'disabled'}>
-        <span class="ticon">${t.icon}</span><b>${t.name}</b><small>${t.tag} · 1~${t.maxPlayers}인 · 3단계 + 최종 추리</small>
+        <span class="ticon">${t.icon}</span><b>${t.name}</b><small>${t.tag} · 1~${t.maxPlayers}인 · ${t.stages.length}단계 + 최종 추리</small>
         <p>${t.blurb}</p>
         <em>${rec[t.id] ? `🏆 최고 ${rec[t.id].rank}등급 ${rec[t.id].score}점` : '미클리어'}</em>
       </button>`).join('')}</div>`;
@@ -467,6 +483,7 @@
         <li>단계마다 <b>관찰 증거</b>를 얻고, 남는 용의자를 추리해야 다음 방이 열립니다.</li>
         <li>마지막에는 범인을 단 한 번 지목한 뒤, 반박을 증거로 깨야 합니다.</li>
         <li>힌트는 팀 전체가 <b>3번</b>까지 쓸 수 있습니다.</li>
+        <li><b>📝 메모</b>에 단서를 담고 용의자를 표시하세요. 팀 메모로 공유할 수도 있어요.</li>
         <li>함께 하면 단서가 사람마다 나뉘어 보여요. 말하거나 채팅으로 알려주세요.</li>
         <li>방마다 숨겨진 수집품이 하나씩 있어요. 모두 찾고 범인을 맞히면 <b>진엔딩</b>.</li>
       </ul></details></main>`;
@@ -557,14 +574,15 @@
     const dark = st.dark && !S.solved[dz.id];
     let marks = '';
     if (dz && !S.solved[dz.id]) {
-      marks = dz.marks.map((m, k) => mine(k) ? `<div class="mark" style="left:${m.x}%;top:${m.y}%">${m.s}<i>${'•'.repeat(m.order)}</i></div>` : '').join('');
+      marks = dz.marks.map((m, k) => mine(k) ? `<div class="mark ${m.fake ? 'fake' : ''}" style="left:${m.x}%;top:${m.y}%">${m.s}<i>${'•'.repeat(m.order)}</i></div>` : '').join('');
     }
     app.innerHTML = `<div class="game">
       <header class="hud">
         <button class="btn small" data-act="menu" aria-label="메뉴">☰</button>
         <div class="stagebar">${P.stages.map((s, i) => `<span class="${i < S.stage ? 'done' : i === S.stage ? 'now' : ''}">${i + 1}</span>`).join('')}<span>⚖</span></div>
         <div id="timer" class="timer">--:--</div>
-        <button class="btn small" data-act="notes">📓 수첩</button>
+        <button class="btn small" data-act="memo" aria-label="메모">📝<span class="bt"> 메모</span></button>
+        <button class="btn small" data-act="notes" aria-label="수첩">📓<span class="bt"> 수첩</span></button>
         ${S.solo ? '' : '<button class="btn small" data-act="chat">💬</button>'}
       </header>
       <div class="stagename"><b>${st.name}</b> <span>${st.msg}</span></div>
@@ -576,7 +594,7 @@
         ${dark ? '<div class="torch"></div>' : ''}
       </div>
       <div class="inventory">${hasPart(S.stage) ? `<button class="item" data-act="item">${partOf(S.stage)[0]} ${partOf(S.stage)[1]}</button>` : '<span>🎒 가진 물건 없음</span>'}</div>
-      <footer class="foot">💡 힌트 ${S.hintsLeft} · ✨ ${P.theme.secretName} ${Object.keys(S.found).length}/3 · 난이도 ${P.d.label}
+      <footer class="foot">💡 힌트 ${S.hintsLeft} · ✨ ${P.theme.secretName} ${Object.keys(S.found).length}/${P.stages.length} · 난이도 ${P.d.label}
         ${connected().length > 1 ? ` · ${connected().map(p => `<span title="${esc(p.name)}">${p.av}</span>`).join('')}` : ''}</footer>
       ${S.cleared === S.stage ? clearPanel() : ''}
     </div>`;
@@ -584,6 +602,8 @@
   }
 
   const evidenceText = i => `<b>${P.theme.evidence[i][0]}</b> — ${P.theme.obs[i][P.truth[i] ? 0 : 1]}`;
+  const pinBtn = html => `<button class="pin" data-act="pin" data-v="${esc(plain(html))}" title="메모에 담기">📌 담기</button>`;
+  const plain = html => { const d = document.createElement('div'); d.innerHTML = html; return d.textContent.trim(); };
   const conclusion = i => `<mark>${P.theme.traits[i][P.truth[i] ? 1 : 2]}</mark>`;
   const testimony = k => `<ul class="clues">${P.suspects.map(s => `<li>${s.face} <b>${s.name}</b> ${window.STORY[S.theme].statements[s.id][k]}</li>`).join('')}</ul>`;
 
@@ -602,7 +622,8 @@
           <button class="btn primary" data-act="deduce" ${S.picks.length ? '' : 'disabled'}>추리 확정 (${S.picks.length}명)</button>`;
     return `<div class="clear ${collapsed ? 'min' : ''}"><div class="card">
       <h2>🚪 ${P.stages[k].name} 돌파!</h2>
-      ${canGo ? `<p class="muted">새 증거</p><p>${evidenceText(k)}</p>` : ''}
+      <button class="btn small" data-act="memo">📝 메모 열기</button>
+      ${canGo ? `<p class="muted">새 증거</p><p>${evidenceText(k)} ${pinBtn(evidenceText(k))}</p>` : ''}
       ${deduction}
       <details><summary>🗣 이 방에 대한 용의자들의 진술</summary>${testimony(k)}</details>
       ${S.found[k] ? '' : `<p class="warn">이 방의 ${P.theme.secretName}을(를) 아직 못 찾았어요. 다음 방으로 가면 돌아올 수 없습니다.</p>`}
@@ -636,19 +657,20 @@
   function accuse() {
     app.innerHTML = `<main class="page"><div class="twist">${P.theme.twist.map((l, i) => `<p class="line" style="animation-delay:${S.votes[me.pid] || seenScreen === 'accuse' ? 0 : i * 1.2}s">${l}</p>`).join('')}</div>
       <section class="panel"><h2>확보한 증거</h2><ol>${P.stages.map((_, i) => `<li>${evidenceText(i)}${i < P.stages.length - 1 ? ' ' + conclusion(i) : ''}</li>`).join('')}</ol></section>
+      <div class="row"><button class="btn small" data-act="memo">📝 메모 보기</button></div>
       <h2>범인은 누구인가? <small>기회는 한 번뿐</small></h2>${suspectCards(true)}
       ${S.solo ? '' : `<p class="muted center">모두 지목하면 다수결로 결정됩니다. (동점이면 방장의 선택) ${Object.keys(S.votes).length}/${connected().length}</p>${chatBox()}`}</main>`;
   }
 
   function end() {
     const pts = S.points, rank = S.letter, secrets = Object.keys(S.found).length, won = S.result === 'good' || S.result === 'true';
-    if (won && S.ranked) window.Rank.addCareer(S.gameId, pts);
+    if (won && S.ranked) { window.Rank.addCareer(S.gameId, pts); recordPersonal(); }
     const used = P.d.minutes * 60 - Math.round(S.timeLeft);
     const culprit = P.suspects.find(s => s.id === P.culprit);
     const accused = P.suspects.find(s => s.id === S.accused);
     const badges = [
       won && S.hintsUsed === 0 && ['🧠', '힌트 없는 천재'], won && S.wrong === 0 && ['🎯', '무결점 추리'],
-      secrets === 3 && ['✨', '수집가'], won && used < P.d.minutes * 30 && ['⚡', '번개 탈출'],
+      secrets === P.stages.length && ['✨', '수집가'], won && used < P.d.minutes * 30 && ['⚡', '번개 탈출'],
       won && S.diff === 'hard' && ['🔥', '어려움 정복'], won && connected().length >= 3 && ['🤝', '환상의 팀워크'],
     ].filter(Boolean);
     const rec = records();
@@ -663,11 +685,12 @@
         <p><b>수법</b> ${window.STORY[S.theme].method}</p>
         <p><b>동기</b> ${window.STORY[S.theme].motives[culprit.id]}</p>
         <p><b>결정적 증거</b></p><ol>${P.stages.map((_, i) => `<li>${evidenceText(i)} → ${conclusion(i)}</li>`).join('')}</ol></section>` : ''}
-      <div class="rank r${rank}">${rank}</div><p><b>${pts}점</b> · ${Math.floor(used / 60)}분 ${used % 60}초 · 힌트 ${S.hintsUsed} · 오답 ${S.wrong} · 수집 ${secrets}/3</p>
+      <div class="rank r${rank}">${rank}</div><p><b>${pts}점</b> · ${Math.floor(used / 60)}분 ${used % 60}초 · 힌트 ${S.hintsUsed} · 오답 ${S.wrong} · 수집 ${secrets}/${P.stages.length}</p>
       <div class="chips">${badges.map(b => `<span class="chip">${b[0]} ${b[1]}</span>`).join('')}</div>
-      ${won && secrets < 3 ? `<p class="warn">숨겨진 ${P.theme.secretName} 3개를 모두 찾으면 다른 결말이…</p>` : ''}
+      ${won && secrets < P.stages.length ? `<p class="warn">숨겨진 ${P.theme.secretName} ${P.stages.length}개를 모두 찾으면 다른 결말이…</p>` : ''}
       ${S.ranked ? `<p class="muted">난이도 가중치 ×${window.Rank.WEIGHT[S.diff]}</p>` : '<p class="muted">고정 문제라 랭킹에는 기록되지 않았어요.</p>'}
       ${tierBadge()}
+      <div class="row"><button class="btn" data-act="rank">🏅 팀·개인 랭킹</button></div>
       <section class="panel"><h2>🏆 ${P.theme.name} · ${P.d.label}</h2>${boardHtml(S.theme, S.diff)}</section>
       <button class="btn primary" data-act="challenge">📨 친구에게 도전장 보내기</button>
       ${role === 'guest' ? '<p class="muted">방장이 다시 시작할 수 있어요.</p>' : '<button class="btn" data-act="lobby">🔁 새 사건</button>'}
@@ -701,7 +724,8 @@
     else if (S.phase === 'proof') proof();
     else if (S.phase === 'end') end();
     seenScreen = screen;
-    if (modal) drawModal();
+    // 메모를 쓰는 중에는 창을 다시 그리지 않는다 (한글 입력이 끊기지 않게)
+    if (modal && !(modal.kind === 'memo' && ['memo', 'noteinput'].includes((document.activeElement || {}).id))) drawModal();
     if (changed && S.phase === 'play') titleCard(P.stages[S.stage].name, P.stages[S.stage].msg);
     const again = focused && document.getElementById(focused);
     if (again) { again.value = typed; again.focus(); }
@@ -713,7 +737,7 @@
 
   function pieces(z, idx) {
     return `<ul class="clues">${z.pieces[idx].map((line, k) => mine(k + idx)
-      ? `<li>${line}</li>`
+      ? `<li>${line} ${pinBtn(line)}</li>`
       : `<li class="hidden-piece">🔒 ${holder(k + idx).av} ${esc(holder(k + idx).name)}님에게만 보이는 단서</li>`).join('')}</ul>`;
   }
 
@@ -723,8 +747,8 @@
     const controls = `<div class="row"><button class="btn" data-act="clear" data-id="${z.id}">지우기</button><button class="btn primary" data-act="submit" data-id="${z.id}">확인</button></div>`;
     const display = (n, f = x => x) => `<div class="display">${Array.from({ length: n }, (_, i) => `<span>${v[i] === undefined ? '·' : esc(f(v[i]))}</span>`).join('')}</div>`;
     switch (z.input) {
-      case 'digits': return `${display(z.length)}<div class="keys c3">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => btn('key', n, n)).join('')}</div>${controls}`;
-      case 'symbols': return `<p class="muted">${connected().length > 1 ? '기호는 사람마다 다르게 보여요. 서로 알려주세요.' : '방 안을 손전등으로 비춰 보세요.'} 점의 개수가 순서입니다.</p>${display(z.length)}<div class="keys c3">${z.keypad.map(s => btn('key', s, s)).join('')}</div>${controls}`;
+      case 'digits': return `${z.type === 'mastermind' || z.type === 'equations' ? '<p class="muted">이 방의 기록을 찾아 암호를 알아내세요.</p>' : ''}${display(z.length)}<div class="keys c3">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => btn('key', n, n)).join('')}</div>${controls}`;
+      case 'symbols': return `<p class="muted">${connected().length > 1 ? '기호는 사람마다 다르게 보여요. 서로 알려주세요.' : '방 안을 손전등으로 비춰 보세요.'}</p><p class="warn">${z.note}</p>${display(z.length)}<div class="keys c3">${z.keypad.map(s => btn('key', s, s)).join('')}</div>${controls}`;
       case 'direction': return `${display(z.length)}<div class="dpad">${['↑', '←', '↓', '→'].map(a => btn('key', a, a, 'd' + '↑←↓→'.indexOf(a))).join('')}</div>${controls}`;
       case 'cipher': return `${display(z.length)}<div class="keys c5">${z.grid.map(s => btn('key', s, s)).join('')}</div><p class="muted">왼쪽 위가 1행 1열</p>${controls}`;
       case 'clock': {
@@ -736,9 +760,9 @@
           <button class="btn primary" data-act="submit" data-id="${z.id}">시각 맞추기</button>`;
       }
       case 'order': return `<p class="muted">작동시킬 순서대로 누르세요.</p>${display(z.labels.length, i => z.labels[i])}<div class="keys c2">${z.labels.map((l, i) => btn('key', i, l, v.includes(i) ? 'used' : '')).join('')}</div>${controls}`;
-      case 'lights': return `<p class="muted">모든 전등을 켜세요. 누르면 이웃도 함께 바뀝니다.</p><div class="keys c3 bulbs">${S.lights[z.id].map((on, i) => btn('light', i, on ? '💡' : '⚫', on ? 'lit' : '')).join('')}</div><button class="btn" data-act="lightReset" data-id="${z.id}">↺ 초기화</button>`;
-      case 'simon': return `<button class="btn" data-act="replay" data-id="${z.id}">▶ 순서 재생 (${z.seq.length}음)</button>${display(z.length || z.seq.length, i => i + 1)}<div class="keys c2 pads">${[0, 1, 2, 3].map(i => btn('pad', i, i + 1, 'pad p' + i)).join('')}</div>`;
-      case 'boxes': return `${pieces(z, 0)}<p><b>단 하나의 문장만 참이다.</b> 열쇠가 든 상자를 고르시오.</p><div class="keys c${z.names.length > 3 ? 5 : 3}">${z.names.map((n, i) => btn('box', i, '📦<br>' + n)).join('')}</div>`;
+      case 'lights': return `<p class="muted">모든 전등을 켜세요. 누르면 이웃도 함께 바뀝니다.</p><div class="keys c${Math.sqrt(S.lights[z.id].length)} bulbs">${S.lights[z.id].map((on, i) => btn('light', i, on ? '💡' : '⚫', on ? 'lit' : '')).join('')}</div><button class="btn" data-act="lightReset" data-id="${z.id}">↺ 초기화</button>`;
+      case 'simon': return `${z.note ? `<p class="warn">${z.note}</p>` : ''}<button class="btn" data-act="replay" data-id="${z.id}">▶ 순서 재생 (${z.seq.length}음)</button>${display(z.length || z.seq.length, i => i + 1)}<div class="keys c2 pads">${[0, 1, 2, 3].map(i => btn('pad', i, i + 1, 'pad p' + i)).join('')}</div>`;
+      case 'boxes': return `${pieces(z, 0)}<p><b>참인 문장은 정확히 ${z.truths}개다.</b> 열쇠가 든 상자를 고르시오.</p><div class="keys c${z.names.length > 3 ? 5 : 3}">${z.names.map((n, i) => btn('box', i, '📦<br>' + n)).join('')}</div>`;
     }
     return '';
   }
@@ -767,7 +791,7 @@
       const part = partOf(S.stage);
       html = `<h2>${part[1]}</h2><div class="bigicon">${part[0]}</div><p>${part[2]}</p><p class="muted">⚙️ 표시가 있는 장치를 열어 끼워 보세요.</p>`;
     } else if (kind === 'text') html = `<h2>${esc(id)}</h2><p>${esc(i)}</p>`;
-    else if (kind === 'secret') html = `<h2>✨ ${P.theme.secretName} (${Number(id) + 1}/3)</h2><p class="paper">${P.theme.secrets[id]}</p>`;
+    else if (kind === 'secret') html = `<h2>✨ ${P.theme.secretName} (${Number(id) + 1}/${P.stages.length})</h2><p class="paper">${P.theme.secrets[id]}</p>`;
     else if (kind === 'notes') {
       html = `<h2>📓 수사 수첩</h2><h3>증거</h3><ul>${P.stages.map((_, k) => `<li>${S.stage > k ? evidenceText(k) + ' ' + conclusion(k) : S.cleared === k ? evidenceText(k) + (S.deduced ? ' ' + conclusion(k) : '') : '??? — 아직 확보하지 못함'}</li>`).join('')}</ul>
         <h3>용의자</h3>${suspectCards(false)}
@@ -775,11 +799,13 @@
         <h3>${P.theme.secretName}</h3><ul>${P.theme.secrets.map((s, k) => `<li>${S.found[k] ? s : '???'}</li>`).join('')}</ul>`;
     } else if (kind === 'rank') {
       const D = window.Puzzles.DIFF;
-      html = `<h2>🏆 팀 랭킹</h2>
+      const tabs = `<div class="seg two"><button data-act="rankView" data-v="team" class="${rankView === 'team' ? 'on' : ''}">👥 팀 랭킹</button><button data-act="rankView" data-v="me" class="${rankView === 'me' ? 'on' : ''}">🙋 개인 랭킹</button></div>`;
+      html = rankView === 'me' ? `<h2>🏅 개인 랭킹</h2>${tabs}<p class="muted">성공한 랭크전 점수를 사람별로 모두 더한 순위</p>${playerHtml()}` : `<h2>🏆 팀 랭킹</h2>${tabs}
         <div class="row">${window.THEMES.map(t => `<button class="btn small ${t.id === id ? 'primary' : ''}" data-act="rankTab" data-id="${t.id}" data-v="${i}">${t.icon} ${t.name}</button>`).join('')}</div>
         <div class="row">${Object.keys(D).map(k => `<button class="btn small ${k === i ? 'primary' : ''}" data-act="rankTab" data-id="${id}" data-v="${k}">${D[k].label} ×${window.Rank.WEIGHT[k]}</button>`).join('')}</div>
         ${boardHtml(id, i)}`;
-    } else if (kind === 'chat') html = `<h2>💬 팀 채팅</h2>${chatBox()}`;
+    } else if (kind === 'memo') html = memoHtml();
+    else if (kind === 'chat') html = `<h2>💬 팀 채팅</h2>${chatBox()}`;
     else if (kind === 'menu') {
       html = `<h2>메뉴</h2>${S.solo ? '' : `<p>방 코드 <b class="code">${esc(S.code)}</b></p><button class="btn" data-act="copy">🔗 초대 링크 복사</button>`}
         <button class="btn" data-act="mute">${window.Sound.muted ? '🔇 소리 꺼짐' : '🔊 소리 켜짐'}</button>
@@ -790,11 +816,62 @@
     const el = $('#modal');
     const old = el.querySelector('.card');
     const scroll = old ? old.scrollTop : 0;
-    const typed = document.activeElement && document.activeElement.id === 'chatin' && el.contains(document.activeElement) ? document.activeElement.value : null;
+    const act = document.activeElement && el.contains(document.activeElement) && ['chatin', 'memo', 'noteinput'].includes(document.activeElement.id) ? document.activeElement : null;
+    const keep = act && { id: act.id, value: act.value, at: act.selectionStart };
     el.innerHTML = `<div class="card"><button class="x" data-act="close" aria-label="닫기">✕</button>${html}</div>`;
     el.hidden = false;
     el.querySelector('.card').scrollTop = scroll;
-    if (typed !== null) { const c = el.querySelector('#chatin'); c.value = typed; c.focus(); }
+    const back = keep && el.querySelector('#' + keep.id);
+    if (back) { back.value = keep.value; back.focus(); back.setSelectionRange(keep.at, keep.at); }
+  }
+
+  /* ---------- 메모장: 개인 메모는 이 기기에, 팀 메모는 게임 상태에 ---------- */
+  const memoKey = () => `esc-memo-${S.gameId}`;
+  const memo = () => Object.assign({ text: '', pins: [], marks: {} }, store.get(memoKey()));
+  const saveMemo = m => store.set(memoKey(), m);
+  const MARKS = ['❔', '✅ 유력', '❌ 제외', '👀 의심'];
+
+  function addPin(text) {
+    if (!S || !S.gameId) return;
+    const m = memo();
+    if (m.pins.some(p => p.text === text)) return toast('이미 담은 단서예요');
+    m.pins.push({ text, where: P.stages[S.stage].name });
+    saveMemo(m); toast('📌 메모에 담았어요', 'good');
+  }
+
+  function memoHtml() {
+    if (!S || !S.gameId) return '<p>게임을 시작하면 메모를 쓸 수 있어요.</p>';
+    const m = memo(), team = !S.solo;
+    return `<h2>📝 단서 메모장</h2>
+      <h3>자유 메모 <small class="muted">나만 보임 · 자동 저장</small></h3>
+      <textarea id="memo" rows="5" maxlength="2000" placeholder="숫자, 순서, 추리한 내용을 적어 두세요">${esc(m.text)}</textarea>
+      ${team ? '<button class="btn small" data-act="shareMemo">📤 자유 메모를 팀에 공유</button>' : ''}
+      <h3>담은 단서 (${m.pins.length})</h3>
+      <ul class="clues">${m.pins.map((p, i) => `<li><small class="muted">${esc(p.where)}</small><br>${esc(p.text)}<br>${team ? `<button class="pin" data-act="sharePin" data-i="${i}">📤 팀에 공유</button>` : ''}<button class="pin" data-act="unpin" data-i="${i}">🗑 지우기</button></li>`).join('') || '<li class="muted">단서 옆의 📌 담기를 누르면 여기에 모여요.</li>'}</ul>
+      <h3>용의자 표시 <small class="muted">누를 때마다 바뀜</small></h3>
+      <div class="marks">${P.suspects.map(s => `<button class="btn small" data-act="mark" data-id="${s.id}">${s.face} ${s.name}<br>${MARKS[m.marks[s.id] || 0]}</button>`).join('')}</div>
+      ${team ? `<h3>👥 팀 메모</h3><ul class="clues">${S.board.map(n => `<li><b>${esc(n.who)}</b> ${esc(n.text)} ${n.pid === me.pid || role === 'host' ? `<button class="pin" data-act="noteDel" data-i="${n.n}">🗑</button>` : ''}</li>`).join('') || '<li class="muted">아직 공유한 메모가 없어요.</li>'}</ul>
+        <form class="noteform"><input id="noteinput" maxlength="200" placeholder="팀에게 남길 메모" autocomplete="off"><button class="btn">공유</button></form>` : ''}`;
+  }
+
+  /* ---------- 개인 랭킹 ---------- */
+  let rankView = 'team', playerCache = null;
+  function recordPersonal() {
+    const sent = store.get('esc-sent') || [];
+    if (sent.includes(S.gameId) || !S.players.some(p => p.pid === me.pid)) return;
+    store.set('esc-sent', sent.concat(S.gameId).slice(-100));
+    window.Rank.submitPlayer({ id: `${me.uid}_${S.gameId}`, uid: me.uid, name: me.name || '탐정', theme: S.theme, diff: S.diff, score: S.points, at: Date.now() })
+      .then(() => { playerCache = null; if (modal && modal.kind === 'rank') drawModal(); });
+  }
+  function playerHtml() {
+    if (!playerCache) {
+      playerCache = { loading: true };
+      window.Rank.players().then(res => { playerCache = res; if (modal && modal.kind === 'rank') drawModal(); });
+    }
+    if (playerCache.loading) return '<div class="spinner"></div>';
+    const scope = { online: '🌐 온라인 전체 랭킹', server: '🖥 이 게임 서버의 랭킹', local: '📱 이 기기에만 저장된 기록' }[playerCache.scope];
+    const rows = playerCache.list.map((e, i) => `<tr class="${e.uid === me.uid ? 'mine' : ''}"><td>${['🥇', '🥈', '🥉'][i] || i + 1}</td><td>${window.Rank.tier(e.total).icon} ${esc(e.name)}</td><td>${e.games}회</td><td>${e.best}</td><td><b>${e.total}</b></td></tr>`).join('');
+    return `<p class="muted">${scope}</p>${rows ? `<table class="board"><thead><tr><th>#</th><th>이름</th><th>성공</th><th>최고</th><th>누적</th></tr></thead><tbody>${rows}</tbody></table>` : '<p>아직 기록이 없어요.</p>'}`;
   }
 
   function chatBox() {
@@ -872,7 +949,15 @@
       case 'begin': case 'next': case 'lobby': case 'deduce': case 'deduceHint': ask({ type: act }); break;
       case 'pick': ask({ type: 'pick', id }); break;
       case 'prove': ask({ type: 'prove', k: Number(id) }); break;
-      case 'rank': if (!S) readName(); boardCache = {}; openModal('rank', S ? S.theme : sel.theme, S && S.diff ? S.diff : sel.diff === 'auto' ? 'easy' : sel.diff); break;
+      case 'rankView': rankView = v; drawModal(); break;
+      case 'memo': openModal('memo'); break;
+      case 'pin': addPin(v); break;
+      case 'unpin': { const m = memo(); m.pins.splice(Number(i), 1); saveMemo(m); drawModal(); break; }
+      case 'sharePin': ask({ type: 'note', text: memo().pins[Number(i)].text }); toast('팀에 공유했어요', 'good'); break;
+      case 'shareMemo': { const text = memo().text.trim(); if (!text) return toast('메모가 비어 있어요'); ask({ type: 'note', text }); toast('팀에 공유했어요', 'good'); break; }
+      case 'noteDel': ask({ type: 'noteDel', n: Number(i) }); break;
+      case 'mark': { const m = memo(); m.marks[id] = ((m.marks[id] || 0) + 1) % MARKS.length; saveMemo(m); drawModal(); break; }
+      case 'rank': if (!S) readName(); boardCache = {}; playerCache = null; openModal('rank', S ? S.theme : sel.theme, S && S.diff ? S.diff : sel.diff === 'auto' ? 'easy' : sel.diff); break;
       case 'rankTab': openModal('rank', id, v); break;
       case 'peek': collapsed = !collapsed; render(); break;
       case 'menu': case 'notes': case 'chat': openModal(act); break;
@@ -928,8 +1013,14 @@
     if (e.target.id === 'teamname' && S) ask({ type: 'config', team: e.target.value });
   });
 
+  document.addEventListener('input', e => {
+    if (e.target.id === 'memo' && S) { const m = memo(); m.text = e.target.value; saveMemo(m); }
+  });
+
   document.addEventListener('submit', e => {
     e.preventDefault();
+    const n = e.target.querySelector('#noteinput');
+    if (n && n.value.trim()) { const text = n.value; n.value = ''; ask({ type: 'note', text }); }
     const c = e.target.querySelector('#chatin');
     if (c && c.value.trim()) { const text = c.value; c.value = ''; ask({ type: 'chat', text }); }
   });
