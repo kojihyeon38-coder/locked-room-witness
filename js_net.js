@@ -3,7 +3,9 @@
   'use strict';
   const PREFIX = 'escroom-kr-v1-';
   const ICE = { config: { iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:global.stun.twilio.com:3478'] },
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] },
+    ...['turn:global.relay.metered.ca:80', 'turn:global.relay.metered.ca:80?transport=tcp', 'turn:global.relay.metered.ca:443', 'turns:global.relay.metered.ca:443?transport=tcp']
+      .map(urls => ({ urls, username: 'a70502666fef8cfd7c34f3e9', credential: 'fSa3VeFhXQQhiAxu' }))
   ] } };
 
 
